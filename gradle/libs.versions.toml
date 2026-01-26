@@ -1,0 +1,38 @@
+[versions]
+agp = "8.9.1"  # 8.9.3-dən 8.9.1-ə endirin (daha stabil)
+kotlin = "2.1.0"  # 2.3.0-dan 2.1.0-a endirin (2.3.0 hələ yoxdur!)
+coreKtx = "1.15.0"  # 1.17.0-dan endirin
+junit = "4.13.2"
+junitVersion = "1.2.1"  # 1.3.0-dan endirin
+espressoCore = "3.6.1"  # 3.7.0-dan endirin
+lifecycleRuntimeKtx = "2.8.7"  # 2.10.0-dan endirin
+activityCompose = "1.9.3"  # 1.12.2-dən endirin
+composeBom = "2024.12.01"  # 2025.12.01-dən düzəldin (2025 hələ yoxdur!)
+hilt = "2.51.1"
+material3 = "1.3.1"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
+androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
+androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3", version.ref = "material3" }
+hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
+hilt-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "hilt" }
+hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version = "1.2.0" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-kapt = { id = "org.jetbrains.kotlin.kapt", version.ref = "kotlin" }  # ⭐ Bu sətri əlavə edin
+hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
