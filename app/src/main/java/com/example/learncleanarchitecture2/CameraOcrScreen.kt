@@ -1,8 +1,11 @@
 package com.example.learncleanarchitecture2
 
 import android.util.Size
+import androidx.annotation.OptIn
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -27,8 +30,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -37,7 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size as ComposeSize
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -48,7 +51,11 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.delay
 
+private const val MIN_TEXT_LINES = 4
+
+@OptIn(ExperimentalGetImage::class)
 @Composable
 fun CameraOcrScreen(
     onTextRecognized: (String) -> Unit,
@@ -62,9 +69,22 @@ fun CameraOcrScreen(
     val isCaptured = remember { AtomicBoolean(false) }
     val recognizer = remember { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
-    var statusText by remember { mutableStateOf("Çeki kameraya yönəldin...") }
-    var stableCount by remember { mutableIntStateOf(0) }
-    var lastText by remember { mutableStateOf("") }
+    var bestText by remember { mutableStateOf("") }
+    var isFullyInFrame by remember { mutableStateOf(false) }
+    var captureCountdown = 3
+    var statusText by remember { mutableStateOf("Çeki çərçivəyə tam daxil edin") }
+
+    // Çek çərçivəyə girəndə 3 saniiyə geri sayım başlayır.
+    // Çek çıxarılsa LaunchedEffect ləğv olur və sayım sıfırlanır.
+    LaunchedEffect(isFullyInFrame) {
+        if (!isFullyInFrame) return@LaunchedEffect
+        delay(1000L)
+        delay(1000L)
+        delay(1000L)
+        if (isCaptured.compareAndSet(false, true)) {
+            onTextRecognized(bestText)
+        }
+    }
 
     val infiniteTransition = rememberInfiniteTransition(label = "scan")
     val scanProgress by infiniteTransition.animateFloat(
@@ -101,7 +121,7 @@ fun CameraOcrScreen(
                     }
 
                     val imageAnalysis = ImageAnalysis.Builder()
-                        .setTargetResolution(Size(1280, 720))
+                        .setTargetResolution(Size(1920, 1080))
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build()
 
@@ -111,41 +131,42 @@ fun CameraOcrScreen(
                             return@setAnalyzer
                         }
 
-                        val mediaImage = imageProxy.image
-                        if (mediaImage == null) {
-                            imageProxy.close()
-                            return@setAnalyzer
-                        }
+                        // Bitmap-ə çevir və preprocessing tətbiq et
+                        val rawBitmap = imageProxy.toBitmap()
+                        val enhanced = enhanceBitmapForOcr(rawBitmap)
 
-                        val image = InputImage.fromMediaImage(
-                            mediaImage,
+                        val image = InputImage.fromBitmap(
+                            enhanced,
                             imageProxy.imageInfo.rotationDegrees
                         )
 
                         recognizer.process(image)
                             .addOnSuccessListener { visionText ->
                                 val detected = visionText.text.trim()
-                                if (detected.isNotEmpty()) {
-                                    if (detected == lastText) {
-                                        stableCount++
-                                        statusText = "Fokuslanır... ($stableCount/3)"
-                                    } else {
-                                        lastText = detected
-                                        stableCount = 1
-                                        statusText = "Mətn axtarılır..."
-                                    }
 
-                                    if (stableCount >= 3 && isCaptured.compareAndSet(false, true)) {
-                                        statusText = "Mətn tapıldı!"
-                                        onTextRecognized(detected)
-                                    }
+                                if (detected.isEmpty()) {
+                                    isFullyInFrame = false
+                                    bestText = ""
+                                    statusText = "Çeki çərçivəyə tam daxil edin"
+                                    return@addOnSuccessListener
+                                }
+
+                                val lineCount = visionText.textBlocks.sumOf { it.lines.size }
+                                val fullyInFrame = isReceiptFullyInFrame(visionText, imageProxy)
+
+                                // bestText-i hər zaman güncəllə (ən tam oxunmuş mətni saxla)
+                                if (detected.length > bestText.length) bestText = detected
+
+                                isFullyInFrame = fullyInFrame
+
+                                statusText = if (fullyInFrame) {
+                                    "Çek tapıldı, gözləyin..."
                                 } else {
-                                    stableCount = 0
-                                    lastText = ""
-                                    statusText = "Çeki kameraya yönəldin..."
+                                    "Çekin hamısını çərçivəyə daxil edin ($lineCount/$MIN_TEXT_LINES sətir)"
                                 }
                             }
                             .addOnCompleteListener {
+                                enhanced.recycle()
                                 imageProxy.close()
                             }
                     }
@@ -168,55 +189,45 @@ fun CameraOcrScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Kənar qarartma + scan çərçivəsi + hərəkətli xətt
+        // Overlay: kənarlaşdırma + künclər + scan xətti
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val padH = size.width * 0.06f
-            val rectTop = size.height * 0.18f
-            val rectBottom = size.height * 0.82f
+            val padH = size.width * 0.05f
+            val rectTop = size.height * 0.05f
+            val rectBottom = size.height * 0.92f
             val rectW = size.width - padH * 2
             val rectH = rectBottom - rectTop
+            val cornerLen = 50f
+            val cornerThickness = 6f
 
-            // Yuxarı qarartma
-            drawRect(
-                color = Color(0xAA000000),
-                topLeft = Offset(0f, 0f),
-                size = ComposeSize(size.width, rectTop)
-            )
-            // Aşağı qarartma
-            drawRect(
-                color = Color(0xAA000000),
-                topLeft = Offset(0f, rectBottom),
-                size = ComposeSize(size.width, size.height - rectBottom)
-            )
-            // Sol qarartma
-            drawRect(
-                color = Color(0xAA000000),
-                topLeft = Offset(0f, rectTop),
-                size = ComposeSize(padH, rectH)
-            )
-            // Sağ qarartma
-            drawRect(
-                color = Color(0xAA000000),
-                topLeft = Offset(size.width - padH, rectTop),
-                size = ComposeSize(padH, rectH)
-            )
+            drawRect(Color(0xBB000000), Offset(0f, 0f), ComposeSize(size.width, rectTop))
+            drawRect(Color(0xBB000000), Offset(0f, rectBottom), ComposeSize(size.width, size.height - rectBottom))
+            drawRect(Color(0xBB000000), Offset(0f, rectTop), ComposeSize(padH, rectH))
+            drawRect(Color(0xBB000000), Offset(size.width - padH, rectTop), ComposeSize(padH, rectH))
 
-            // Scan çərçivəsi
-            drawRect(
-                color = Color(0xFF00E676),
-                topLeft = Offset(padH, rectTop),
-                size = ComposeSize(rectW, rectH),
-                style = Stroke(width = 3f)
-            )
+            if (isFullyInFrame) {
+                val lineY = rectTop + rectH * scanProgress
+                drawLine(
+                    color = Color(0xFF00E676).copy(alpha = 0.85f),
+                    start = Offset(padH, lineY),
+                    end = Offset(padH + rectW, lineY),
+                    strokeWidth = 4f
+                )
+            }
 
-            // Yuxarıdan aşağıya hərəkət edən scan xətti
-            val lineY = rectTop + rectH * scanProgress
-            drawLine(
-                color = Color(0xFF00E676).copy(alpha = 0.9f),
-                start = Offset(padH, lineY),
-                end = Offset(padH + rectW, lineY),
-                strokeWidth = 4f
-            )
+            val cornerColor = if (isFullyInFrame) Color(0xFF00E676) else Color.White
+
+            // Sol-yuxarı
+            drawLine(cornerColor, Offset(padH, rectTop), Offset(padH + cornerLen, rectTop), cornerThickness, StrokeCap.Round)
+            drawLine(cornerColor, Offset(padH, rectTop), Offset(padH, rectTop + cornerLen), cornerThickness, StrokeCap.Round)
+            // Sağ-yuxarı
+            drawLine(cornerColor, Offset(padH + rectW, rectTop), Offset(padH + rectW - cornerLen, rectTop), cornerThickness, StrokeCap.Round)
+            drawLine(cornerColor, Offset(padH + rectW, rectTop), Offset(padH + rectW, rectTop + cornerLen), cornerThickness, StrokeCap.Round)
+            // Sol-aşağı
+            drawLine(cornerColor, Offset(padH, rectBottom), Offset(padH + cornerLen, rectBottom), cornerThickness, StrokeCap.Round)
+            drawLine(cornerColor, Offset(padH, rectBottom), Offset(padH, rectBottom - cornerLen), cornerThickness, StrokeCap.Round)
+            // Sağ-aşağı
+            drawLine(cornerColor, Offset(padH + rectW, rectBottom), Offset(padH + rectW - cornerLen, rectBottom), cornerThickness, StrokeCap.Round)
+            drawLine(cornerColor, Offset(padH + rectW, rectBottom), Offset(padH + rectW, rectBottom - cornerLen), cornerThickness, StrokeCap.Round)
         }
 
         // Status mətn + Geri düyməsi
@@ -224,7 +235,7 @@ fun CameraOcrScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 40.dp, start = 16.dp, end = 16.dp),
+                .padding(bottom = 16.dp, start = 16.dp, end = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Surface(
@@ -233,13 +244,13 @@ fun CameraOcrScreen(
             ) {
                 Text(
                     text = statusText,
-                    color = Color.White,
+                    color = if (isFullyInFrame) Color(0xFF00E676) else Color.White,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             OutlinedButton(
                 onClick = onBack,
@@ -249,4 +260,24 @@ fun CameraOcrScreen(
             }
         }
     }
+}
+
+private fun isReceiptFullyInFrame(
+    visionText: com.google.mlkit.vision.text.Text,
+    imageProxy: ImageProxy
+): Boolean {
+    val allLines = visionText.textBlocks.flatMap { it.lines }
+    if (allLines.size < MIN_TEXT_LINES) return false
+
+    val boxes = allLines.mapNotNull { it.boundingBox }
+    if (boxes.isEmpty()) return false
+
+    val spanX = (boxes.maxOf { it.right } - boxes.minOf { it.left }).toFloat()
+    val spanY = (boxes.maxOf { it.bottom } - boxes.minOf { it.top }).toFloat()
+
+    val rotation = imageProxy.imageInfo.rotationDegrees
+    val displayW = if (rotation == 90 || rotation == 270) imageProxy.height.toFloat() else imageProxy.width.toFloat()
+    val displayH = if (rotation == 90 || rotation == 270) imageProxy.width.toFloat() else imageProxy.height.toFloat()
+
+    return spanX >= displayW * 0.30f && spanY >= displayH * 0.40f
 }
